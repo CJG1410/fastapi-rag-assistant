@@ -1,0 +1,10 @@
+FastAPI
+Uvicorn
+LangGraph
+LangChain
+Google Gemini integration
+ChromaDB
+Sentence Transformers
+Tavily
+Pydantic
+python-dotenv
