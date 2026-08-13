@@ -54,7 +54,6 @@ class ChromaVectorStore:
                 name=self.collection_name
             )
         except Exception:
-            # Collection may not exist on the first run.
             pass
 
         self.collection = self.client.get_or_create_collection(
@@ -73,10 +72,36 @@ class ChromaVectorStore:
         self,
         query_embedding: list[float],
         n_results: int = 5,
-    ):
-        """Search for the most similar document chunks."""
+    ) -> list[dict]:
+        """Retrieve the most similar document chunks."""
 
-        return self.collection.query(
+        results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
+            include=[
+                "documents",
+                "metadatas",
+                "distances",
+            ],
         )
+
+        documents = results["documents"][0]
+        metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
+
+        retrieved = []
+
+        for document, metadata, distance in zip(
+            documents,
+            metadatas,
+            distances,
+        ):
+            retrieved.append(
+                {
+                    "content": document,
+                    "metadata": metadata,
+                    "distance": distance,
+                }
+            )
+
+        return retrieved
