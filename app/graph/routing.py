@@ -8,17 +8,33 @@ def route_after_grading(
     Decide what happens after document grading.
 
     Returns:
-        "generate"      → relevant documents found
-        "rewrite_query" → no relevant documents and
-                          retries remain
-        "end"           → no relevant documents and
-                          retry limit reached
+
+        "generate"
+            Relevant local documents found.
+
+        "rewrite_query"
+            No relevant documents and retries remain.
+
+        "web_search"
+            No relevant documents and retry limit reached.
     """
+
+    # --------------------------------------------------
+    # Local documentation is relevant
+    # --------------------------------------------------
 
     if state["documents_relevant"]:
         return "generate"
 
+    # --------------------------------------------------
+    # We still have retries available
+    # --------------------------------------------------
+
     if state["retry_count"] < state["max_retries"]:
         return "rewrite_query"
 
-    return "end"
+    # --------------------------------------------------
+    # Local retrieval failed completely
+    # --------------------------------------------------
+
+    return "web_search"

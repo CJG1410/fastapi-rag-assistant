@@ -5,6 +5,7 @@ from app.graph.nodes import (
     grade_documents,
     retrieve_documents,
     rewrite_query,
+    web_search,
 )
 from app.graph.routing import route_after_grading
 from app.graph.state import GraphState
@@ -35,6 +36,11 @@ def build_graph():
     )
 
     workflow.add_node(
+        "web_search",
+        web_search,
+    )
+
+    workflow.add_node(
         "generate",
         generate_answer,
     )
@@ -58,7 +64,7 @@ def build_graph():
     )
 
     # --------------------------------------------------
-    # GRADE → conditional routing
+    # GRADE → Conditional routing
     # --------------------------------------------------
 
     workflow.add_conditional_edges(
@@ -67,7 +73,7 @@ def build_graph():
         {
             "generate": "generate",
             "rewrite_query": "rewrite",
-            "end": END,
+            "web_search": "web_search",
         },
     )
 
@@ -78,6 +84,15 @@ def build_graph():
     workflow.add_edge(
         "rewrite",
         "retrieve",
+    )
+
+    # --------------------------------------------------
+    # WEB SEARCH → GENERATE
+    # --------------------------------------------------
+
+    workflow.add_edge(
+        "web_search",
+        "generate",
     )
 
     # --------------------------------------------------

@@ -14,10 +14,14 @@ def run_test(
         "current_query": question,
         "documents": [],
         "relevant_documents": [],
+        "web_results": [],
         "retry_count": 0,
         "max_retries": 2,
         "answer": "",
+        "sources": [],
+        "source_type": "",
         "documents_relevant": False,
+        "web_search_used": False,
     }
 
     result = graph.invoke(
@@ -44,8 +48,23 @@ def run_test(
     )
 
     print(
-        f"Relevant documents: "
+        f"Relevant local documents: "
         f"{len(result['relevant_documents'])}"
+    )
+
+    print(
+        f"Web search used: "
+        f"{result['web_search_used']}"
+    )
+
+    print(
+        f"Web results: "
+        f"{len(result['web_results'])}"
+    )
+
+    print(
+        f"Source type: "
+        f"{result['source_type']}"
     )
 
     print(
@@ -54,7 +73,7 @@ def run_test(
     )
 
     # --------------------------------------------------
-    # Display generated answer
+    # Generated answer
     # --------------------------------------------------
 
     if result["answer"]:
@@ -69,17 +88,50 @@ def run_test(
 
         print("\nNo answer was generated.")
 
+    # --------------------------------------------------
+    # Sources
+    # --------------------------------------------------
+
+    print("\n" + "=" * 80)
+    print("SOURCES")
+    print("=" * 80)
+
+    if result["sources"]:
+
+        for index, source in enumerate(
+            result["sources"],
+            start=1,
+        ):
+            print(
+                f"\n{index}. "
+                f"{source['title']}"
+            )
+
+            print(
+                f"   Type: "
+                f"{source['type']}"
+            )
+
+            print(
+                f"   URL: "
+                f"{source['url']}"
+            )
+
+    else:
+
+        print("No sources.")
+
 
 def main():
 
     print("=" * 80)
-    print("LANGGRAPH SELF-CORRECTIVE RAG TEST")
+    print("LANGGRAPH SELF-CORRECTIVE RAG + WEB FALLBACK TEST")
     print("=" * 80)
 
     graph = build_graph()
 
     # --------------------------------------------------
-    # Test 1 — In-domain question
+    # Test 1 — Local documentation
     # --------------------------------------------------
 
     run_test(
@@ -88,7 +140,7 @@ def main():
     )
 
     # --------------------------------------------------
-    # Test 2 — Out-of-domain question
+    # Test 2 — Web fallback
     # --------------------------------------------------
 
     run_test(

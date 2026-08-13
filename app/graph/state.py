@@ -4,25 +4,38 @@ from typing import TypedDict
 class GraphState(TypedDict):
     """State shared between LangGraph nodes."""
 
+    # Original user question
     question: str
 
-    # The current query being used for retrieval.
+    # Current query used for retrieval
     current_query: str
 
-    # Retrieved documents from ChromaDB.
+    # ChromaDB retrieved documents
     documents: list[dict]
 
-    # Documents that passed Gemini relevance grading.
+    # Documents that passed Gemini relevance grading
     relevant_documents: list[dict]
 
-    # Number of retrieval/rewrite cycles completed.
+    # Tavily web search results
+    web_results: list[dict]
+
+    # Number of retrieval/rewrite cycles
     retry_count: int
 
-    # Maximum number of retries allowed.
+    # Maximum number of query rewrites
     max_retries: int
 
-    # Final generated answer.
+    # Final generated answer
     answer: str
 
-    # Whether relevant documents were found.
+    # Sources used to produce the answer
+    sources: list[dict]
+
+    # "local" or "web"
+    source_type: str
+
+    # Whether relevant local documents were found
     documents_relevant: bool
+
+    # Whether Tavily was used
+    web_search_used: bool

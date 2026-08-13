@@ -3,6 +3,7 @@ from app.services.gemini import GeminiService
 from app.services.grader import DocumentGrader
 from app.services.query_rewriter import QueryRewriter
 from app.services.retriever import Retriever
+from app.services.tavily_search import TavilySearchService
 
 
 # ---------------------------------------------------------
@@ -13,6 +14,7 @@ retriever = Retriever()
 grader = DocumentGrader()
 query_rewriter = QueryRewriter()
 gemini = GeminiService()
+tavily = TavilySearchService()
 
 
 # ---------------------------------------------------------
@@ -148,50 +150,121 @@ def rewrite_query(state: GraphState) -> GraphState:
         for document in documents
     ]
 
-    rewritten = query_rewriter.rewrite(
-        original_query=current_query,
-        failed_documents=failed_documents,
-    )
+    try:
 
-    print(
-        f"Original query: {current_query}"
-    )
+        rewritten = query_rewriter.rewrite(
+            original_query=current_query,
+            failed_documents=failed_documents,
+        )
 
-    print(
-        f"Rewritten query: {rewritten.query}"
-    )
+        new_query = rewritten.query
+
+        print(
+            f"Original query: {current_query}"
+        )
+
+        print(
+            f"Rewritten query: {new_query}"
+        )
+
+    except Exception as exc:
+
+        print(
+            "\nWarning: Query rewriting failed."
+        )
+
+        print(
+            f"Reason: {exc}"
+        )
+
+        print(
+            "Keeping the current query and "
+            "continuing the retry cycle."
+        )
+
+        new_query = current_query
 
     return {
         **state,
-        "current_query": rewritten.query,
+        "current_query": new_query,
         "retry_count": state["retry_count"] + 1,
     }
 
+# ---------------------------------------------------------
+# Node 4 — Web Search
+# ---------------------------------------------------------
+
+def web_search(state: GraphState) -> GraphState:
+    """Search the web using Tavily when local retrieval fails."""
+
+    query = state["current_query"]
+
+    print("\n" + "=" * 70)
+    print("NODE: TAVILY WEB SEARCH")
+    print("=" * 70)
+
+    print(f"Web search query: {query}")
+
+    results = tavily.search(
+        query=query,
+        max_results=5,
+    )
+
+    print(
+        f"Tavily returned {len(results)} results."
+    )
+
+    for index, result in enumerate(
+        results,
+        start=1,
+    ):
+        print(
+            f"\nResult {index}: "
+            f"{result.get('title', 'Unknown')}"
+        )
+
+        print(
+            f"URL: "
+            f"{result.get('url', 'Unknown')}"
+        )
+
+    return {
+        **state,
+        "web_results": results,
+        "web_search_used": True,
+    }
 
 # ---------------------------------------------------------
-# Node 4 — Answer Generation
+# Node 5 — Answer Generation
 # ---------------------------------------------------------
 
 def generate_answer(state: GraphState) -> GraphState:
-    """Generate a grounded answer using relevant documents."""
+    """Generate a grounded answer using local or web context."""
 
     question = state["question"]
+
     relevant_documents = state["relevant_documents"]
+
+    web_results = state["web_results"]
+
+    web_search_used = state["web_search_used"]
 
     print("\n" + "=" * 70)
     print("NODE: GENERATE ANSWER")
     print("=" * 70)
 
-    # -----------------------------------------------------
-    # Build grounded context
-    # -----------------------------------------------------
-
     context_parts = []
+    sources = []
+
+    # -----------------------------------------------------
+    # Local documentation
+    # -----------------------------------------------------
 
     for index, document in enumerate(
         relevant_documents,
         start=1,
     ):
+
         metadata = document["metadata"]
 
         source = metadata.get(
@@ -204,18 +277,90 @@ def generate_answer(state: GraphState) -> GraphState:
             "unknown",
         )
 
+        url = metadata.get(
+            "url",
+            "",
+        )
+
         context_parts.append(
             f"""
-DOCUMENT {index}
+LOCAL DOCUMENT {index}
+
 Source: {source}
 Title: {title}
+URL: {url}
 
 Content:
 {document["content"]}
 """
         )
 
+        sources.append(
+            {
+                "title": title,
+                "source": source,
+                "url": url,
+                "type": "local",
+            }
+        )
+
+    # -----------------------------------------------------
+    # Tavily web results
+    # -----------------------------------------------------
+
+    if web_search_used:
+
+        for index, result in enumerate(
+            web_results,
+            start=1,
+        ):
+
+            title = result.get(
+                "title",
+                "Unknown",
+            )
+
+            url = result.get(
+                "url",
+                "",
+            )
+
+            content = result.get(
+                "content",
+                "",
+            )
+
+            context_parts.append(
+                f"""
+WEB RESULT {index}
+
+Title: {title}
+URL: {url}
+
+Content:
+{content}
+"""
+            )
+
+            sources.append(
+                {
+                    "title": title,
+                    "source": url,
+                    "url": url,
+                    "type": "web",
+                }
+            )
+
     context = "\n\n".join(context_parts)
+
+    # -----------------------------------------------------
+    # Source type
+    # -----------------------------------------------------
+
+    if web_search_used:
+        source_type = "web"
+    else:
+        source_type = "local"
 
     # -----------------------------------------------------
     # Generation prompt
@@ -224,28 +369,29 @@ Content:
     prompt = f"""
 You are a technical documentation assistant.
 
-Answer the user's question using ONLY the provided
-technical documentation.
+Answer the user's question using ONLY the provided context.
 
 USER QUESTION:
 {question}
 
-DOCUMENTATION CONTEXT:
+CONTEXT:
 {context}
 
 Rules:
 
 1. Answer the question directly.
-2. Use only information supported by the documentation.
-3. Do not invent APIs, parameters, behavior, or examples.
-4. If the documentation contains a relevant code example,
-   you may include it.
-5. If the documentation does not contain enough information,
-   clearly say so.
-6. Keep the answer concise but technically useful.
-7. Do not mention the retrieval system, document grader,
-   LangGraph, or internal processing.
-8. Mention the relevant source document when appropriate.
+2. Do not invent technical facts.
+3. Do not invent APIs, parameters, commands, or behavior.
+4. If local documentation is available, prefer it.
+5. If web results are provided, use them only because the
+   local documentation was insufficient.
+6. If the context is insufficient, clearly say so.
+7. Keep the answer technically accurate and concise.
+8. Do not mention LangGraph, document grading, retrieval,
+   or internal workflow details.
+9. Do not create or invent source URLs.
+10. Do not include a separate Sources section in the answer.
+    Sources will be returned separately by the application.
 
 Provide the final answer now.
 """
@@ -263,4 +409,6 @@ Provide the final answer now.
     return {
         **state,
         "answer": answer,
+        "sources": sources,
+        "source_type": source_type,
     }
