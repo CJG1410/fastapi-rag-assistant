@@ -23,8 +23,8 @@ tavily = TavilySearchService()
 
 TOP_K = 5
 
-# This is only a candidate-quality gate.
-# Gemini remains the final relevance judge.
+# Candidate-quality gate.
+# Gemini performs the final semantic relevance grading.
 DISTANCE_THRESHOLD = 1.0
 
 MAX_RETRIES = 2
@@ -190,12 +190,13 @@ def rewrite_query(state: GraphState) -> GraphState:
         "retry_count": state["retry_count"] + 1,
     }
 
+
 # ---------------------------------------------------------
-# Node 4 — Web Search
+# Node 4 — Tavily Web Search
 # ---------------------------------------------------------
 
 def web_search(state: GraphState) -> GraphState:
-    """Search the web using Tavily when local retrieval fails."""
+    """Search the web using Tavily after local retrieval fails."""
 
     query = state["current_query"]
 
@@ -203,7 +204,9 @@ def web_search(state: GraphState) -> GraphState:
     print("NODE: TAVILY WEB SEARCH")
     print("=" * 70)
 
-    print(f"Web search query: {query}")
+    print(
+        f"Web search query: {query}"
+    )
 
     results = tavily.search(
         query=query,
@@ -218,6 +221,7 @@ def web_search(state: GraphState) -> GraphState:
         results,
         start=1,
     ):
+
         print(
             f"\nResult {index}: "
             f"{result.get('title', 'Unknown')}"
@@ -234,6 +238,7 @@ def web_search(state: GraphState) -> GraphState:
         "web_search_used": True,
     }
 
+
 # ---------------------------------------------------------
 # Node 5 — Answer Generation
 # ---------------------------------------------------------
@@ -243,21 +248,30 @@ def generate_answer(state: GraphState) -> GraphState:
 
     question = state["question"]
 
-    relevant_documents = state["relevant_documents"]
+    relevant_documents = state[
+        "relevant_documents"
+    ]
 
-    web_results = state["web_results"]
+    web_results = state[
+        "web_results"
+    ]
 
-    web_search_used = state["web_search_used"]
+    web_search_used = state[
+        "web_search_used"
+    ]
 
     print("\n" + "=" * 70)
     print("NODE: GENERATE ANSWER")
     print("=" * 70)
 
     context_parts = []
-    sources = []
+
+    # Dictionary used to automatically deduplicate
+    # sources with the same URL.
+    sources_by_url = {}
 
     # -----------------------------------------------------
-    # Local documentation
+    # Local documentation context
     # -----------------------------------------------------
 
     for index, document in enumerate(
@@ -295,17 +309,23 @@ Content:
 """
         )
 
-        sources.append(
-            {
+        # ---------------------------------------------
+        # Deduplicate local sources
+        # ---------------------------------------------
+
+        source_key = url or source
+
+        if source_key not in sources_by_url:
+
+            sources_by_url[source_key] = {
                 "title": title,
                 "source": source,
                 "url": url,
                 "type": "local",
             }
-        )
 
     # -----------------------------------------------------
-    # Tavily web results
+    # Tavily web context
     # -----------------------------------------------------
 
     if web_search_used:
@@ -342,19 +362,33 @@ Content:
 """
             )
 
-            sources.append(
-                {
+            # ---------------------------------------------
+            # Deduplicate web sources
+            # ---------------------------------------------
+
+            if url and url not in sources_by_url:
+
+                sources_by_url[url] = {
                     "title": title,
                     "source": url,
                     "url": url,
                     "type": "web",
                 }
-            )
-
-    context = "\n\n".join(context_parts)
 
     # -----------------------------------------------------
-    # Source type
+    # Convert dictionary to list
+    # -----------------------------------------------------
+
+    sources = list(
+        sources_by_url.values()
+    )
+
+    context = "\n\n".join(
+        context_parts
+    )
+
+    # -----------------------------------------------------
+    # Determine source type
     # -----------------------------------------------------
 
     if web_search_used:
@@ -391,7 +425,7 @@ Rules:
    or internal workflow details.
 9. Do not create or invent source URLs.
 10. Do not include a separate Sources section in the answer.
-    Sources will be returned separately by the application.
+    Sources are returned separately by the application.
 
 Provide the final answer now.
 """
@@ -405,6 +439,10 @@ Provide the final answer now.
 
     print("\nGenerated answer:")
     print(answer)
+
+    # -----------------------------------------------------
+    # Return updated state
+    # -----------------------------------------------------
 
     return {
         **state,
