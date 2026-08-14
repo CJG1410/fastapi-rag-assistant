@@ -2,40 +2,77 @@ from typing import TypedDict
 
 
 class GraphState(TypedDict):
-    """State shared between LangGraph nodes."""
 
-    # Original user question
+    # -----------------------------------------------------
+    # User question
+    # -----------------------------------------------------
+
     question: str
 
-    # Current query used for retrieval
+    # -----------------------------------------------------
+    # Current retrieval query
+    # -----------------------------------------------------
+
     current_query: str
 
-    # ChromaDB retrieved documents
+    # -----------------------------------------------------
+    # Local retrieval
+    # -----------------------------------------------------
+
     documents: list[dict]
 
-    # Documents that passed Gemini relevance grading
     relevant_documents: list[dict]
 
-    # Tavily web search results
+    # -----------------------------------------------------
+    # Web search
+    # -----------------------------------------------------
+
     web_results: list[dict]
 
-    # Number of retrieval/rewrite cycles
+    # -----------------------------------------------------
+    # Retrieval retry information
+    # -----------------------------------------------------
+
     retry_count: int
 
-    # Maximum number of query rewrites
     max_retries: int
 
-    # Final generated answer
+    # -----------------------------------------------------
+    # Final answer
+    # -----------------------------------------------------
+
     answer: str
 
-    # Sources used to produce the answer
+    # -----------------------------------------------------
+    # Sources
+    # -----------------------------------------------------
+
     sources: list[dict]
 
-    # "local" or "web"
     source_type: str
 
-    # Whether relevant local documents were found
+    # -----------------------------------------------------
+    # Retrieval state
+    # -----------------------------------------------------
+
     documents_relevant: bool
 
-    # Whether Tavily was used
     web_search_used: bool
+
+    # -----------------------------------------------------
+    # Hallucination verification
+    # -----------------------------------------------------
+
+    hallucination_checked: bool
+
+    answer_supported: bool
+
+    verification_reason: str
+
+    # -----------------------------------------------------
+    # Generation retry
+    # -----------------------------------------------------
+
+    generation_retry_count: int
+
+    max_generation_retries: int

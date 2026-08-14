@@ -1,41 +1,51 @@
 from app.graph.state import GraphState
+
 from app.services.gemini import GeminiService
 from app.services.grader import DocumentGrader
 from app.services.query_rewriter import QueryRewriter
 from app.services.retriever import Retriever
 from app.services.tavily_search import TavilySearchService
+from app.services.hallucination_checker import HallucinationChecker
 
 
-# ---------------------------------------------------------
-# Services
-# ---------------------------------------------------------
+# =========================================================
+# SERVICES
+# =========================================================
 
 retriever = Retriever()
 grader = DocumentGrader()
 query_rewriter = QueryRewriter()
 gemini = GeminiService()
 tavily = TavilySearchService()
+hallucination_checker = HallucinationChecker()
 
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# =========================================================
+# CONFIGURATION
+# =========================================================
 
 TOP_K = 5
 
-# Candidate-quality gate.
+# Distance threshold for ChromaDB candidates.
 # Gemini performs the final semantic relevance grading.
 DISTANCE_THRESHOLD = 1.0
 
+# Maximum number of retrieval/query-rewrite retries.
 MAX_RETRIES = 2
 
+# Maximum number of answer regeneration attempts
+# after hallucination verification fails.
+MAX_GENERATION_RETRIES = 1
 
-# ---------------------------------------------------------
-# Node 1 — Retrieval
-# ---------------------------------------------------------
+
+# =========================================================
+# NODE 1 — RETRIEVAL
+# =========================================================
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    """Retrieve candidate documents from ChromaDB."""
+    """
+    Retrieve candidate documents from ChromaDB.
+    """
 
     query = state["current_query"]
 
@@ -60,12 +70,14 @@ def retrieve_documents(state: GraphState) -> GraphState:
     }
 
 
-# ---------------------------------------------------------
-# Node 2 — Document Grading
-# ---------------------------------------------------------
+# =========================================================
+# NODE 2 — DOCUMENT GRADING
+# =========================================================
 
 def grade_documents(state: GraphState) -> GraphState:
-    """Grade retrieved documents using Gemini."""
+    """
+    Grade retrieved documents using Gemini.
+    """
 
     query = state["current_query"]
     documents = state["documents"]
@@ -81,14 +93,16 @@ def grade_documents(state: GraphState) -> GraphState:
         distance = document["distance"]
 
         # -------------------------------------------------
-        # Distance quality gate
+        # Initial vector-distance filter
         # -------------------------------------------------
 
         if distance > DISTANCE_THRESHOLD:
+
             print(
                 f"Skipping document with distance "
                 f"{distance:.4f}"
             )
+
             continue
 
         # -------------------------------------------------
@@ -112,8 +126,12 @@ def grade_documents(state: GraphState) -> GraphState:
         )
 
         if grade.relevant:
+
             document["grade_reason"] = grade.reason
-            relevant_documents.append(document)
+
+            relevant_documents.append(
+                document
+            )
 
     documents_relevant = (
         len(relevant_documents) > 0
@@ -131,14 +149,17 @@ def grade_documents(state: GraphState) -> GraphState:
     }
 
 
-# ---------------------------------------------------------
-# Node 3 — Query Rewriting
-# ---------------------------------------------------------
+# =========================================================
+# NODE 3 — QUERY REWRITING
+# =========================================================
 
 def rewrite_query(state: GraphState) -> GraphState:
-    """Rewrite the query after unsuccessful retrieval."""
+    """
+    Rewrite the query after unsuccessful retrieval.
+    """
 
     current_query = state["current_query"]
+
     documents = state["documents"]
 
     print("\n" + "=" * 70)
@@ -191,12 +212,14 @@ def rewrite_query(state: GraphState) -> GraphState:
     }
 
 
-# ---------------------------------------------------------
-# Node 4 — Tavily Web Search
-# ---------------------------------------------------------
+# =========================================================
+# NODE 4 — TAVILY WEB SEARCH
+# =========================================================
 
 def web_search(state: GraphState) -> GraphState:
-    """Search the web using Tavily after local retrieval fails."""
+    """
+    Search the web using Tavily after local retrieval fails.
+    """
 
     query = state["current_query"]
 
@@ -239,14 +262,17 @@ def web_search(state: GraphState) -> GraphState:
     }
 
 
-# ---------------------------------------------------------
-# Node 5 — Answer Generation
-# ---------------------------------------------------------
+# =========================================================
+# HELPER — BUILD GENERATION CONTEXT
+# =========================================================
 
-def generate_answer(state: GraphState) -> GraphState:
-    """Generate a grounded answer using local or web context."""
-
-    question = state["question"]
+def _build_generation_context(
+    state: GraphState,
+) -> tuple[str, list[dict]]:
+    """
+    Build the context supplied to Gemini and create
+    deduplicated source metadata.
+    """
 
     relevant_documents = state[
         "relevant_documents"
@@ -260,18 +286,12 @@ def generate_answer(state: GraphState) -> GraphState:
         "web_search_used"
     ]
 
-    print("\n" + "=" * 70)
-    print("NODE: GENERATE ANSWER")
-    print("=" * 70)
-
     context_parts = []
 
-    # Dictionary used to automatically deduplicate
-    # sources with the same URL.
     sources_by_url = {}
 
     # -----------------------------------------------------
-    # Local documentation context
+    # LOCAL DOCUMENTATION
     # -----------------------------------------------------
 
     for index, document in enumerate(
@@ -309,10 +329,6 @@ Content:
 """
         )
 
-        # ---------------------------------------------
-        # Deduplicate local sources
-        # ---------------------------------------------
-
         source_key = url or source
 
         if source_key not in sources_by_url:
@@ -325,7 +341,7 @@ Content:
             }
 
     # -----------------------------------------------------
-    # Tavily web context
+    # TAVILY RESULTS
     # -----------------------------------------------------
 
     if web_search_used:
@@ -362,10 +378,6 @@ Content:
 """
             )
 
-            # ---------------------------------------------
-            # Deduplicate web sources
-            # ---------------------------------------------
-
             if url and url not in sources_by_url:
 
                 sources_by_url[url] = {
@@ -375,20 +387,42 @@ Content:
                     "type": "web",
                 }
 
-    # -----------------------------------------------------
-    # Convert dictionary to list
-    # -----------------------------------------------------
+    context = "\n\n".join(
+        context_parts
+    )
 
     sources = list(
         sources_by_url.values()
     )
 
-    context = "\n\n".join(
-        context_parts
+    return context, sources
+
+
+# =========================================================
+# NODE 5 — ANSWER GENERATION
+# =========================================================
+
+def generate_answer(state: GraphState) -> GraphState:
+    """
+    Generate a grounded answer using local or web context.
+    """
+
+    question = state["question"]
+
+    web_search_used = state[
+        "web_search_used"
+    ]
+
+    print("\n" + "=" * 70)
+    print("NODE: GENERATE ANSWER")
+    print("=" * 70)
+
+    context, sources = (
+        _build_generation_context(state)
     )
 
     # -----------------------------------------------------
-    # Determine source type
+    # Source type
     # -----------------------------------------------------
 
     if web_search_used:
@@ -430,23 +464,189 @@ Rules:
 Provide the final answer now.
 """
 
-    response = gemini.client.models.generate_content(
-        model=gemini.model,
-        contents=prompt,
-    )
+    try:
 
-    answer = response.text
+        response = gemini.client.models.generate_content(
+            model=gemini.model,
+            contents=prompt,
+        )
+
+        answer = response.text
+
+    except Exception as exc:
+
+        print(
+            f"\nError during answer generation: {exc}"
+        )
+
+        answer = (
+            "I was unable to generate an answer "
+            "at this time."
+        )
 
     print("\nGenerated answer:")
     print(answer)
-
-    # -----------------------------------------------------
-    # Return updated state
-    # -----------------------------------------------------
 
     return {
         **state,
         "answer": answer,
         "sources": sources,
         "source_type": source_type,
+    }
+
+
+# =========================================================
+# NODE 6 — VERIFY GENERATED ANSWER
+# =========================================================
+
+def verify_answer(state: GraphState) -> GraphState:
+    """
+    Verify whether the generated answer is supported
+    by the retrieved context.
+    """
+
+    question = state["question"]
+
+    answer = state["answer"]
+
+    print("\n" + "=" * 70)
+    print("NODE: VERIFY ANSWER")
+    print("=" * 70)
+
+    # -----------------------------------------------------
+    # Build verification context
+    # -----------------------------------------------------
+
+    context_parts = []
+
+    for document in state[
+        "relevant_documents"
+    ]:
+
+        context_parts.append(
+            document["content"]
+        )
+
+    if state["web_search_used"]:
+
+        for result in state[
+            "web_results"
+        ]:
+
+            content = result.get(
+                "content",
+                "",
+            )
+
+            if content:
+                context_parts.append(
+                    content
+                )
+
+    context = "\n\n".join(
+        context_parts
+    )
+
+    # -----------------------------------------------------
+    # No context
+    # -----------------------------------------------------
+
+    if not context.strip():
+
+        print(
+            "No verification context available."
+        )
+
+        return {
+            **state,
+            "hallucination_checked": True,
+            "answer_supported": False,
+            "verification_reason": (
+                "No supporting context was available."
+            ),
+        }
+
+    # -----------------------------------------------------
+    # Gemini verification
+    # -----------------------------------------------------
+
+    try:
+
+        result = hallucination_checker.check(
+            question=question,
+            answer=answer,
+            context=context,
+        )
+
+        print(
+            f"Supported: {result.supported}"
+        )
+
+        print(
+            f"Reason: {result.reason}"
+        )
+
+        return {
+            **state,
+            "hallucination_checked": True,
+            "answer_supported": result.supported,
+            "verification_reason": result.reason,
+        }
+
+    except Exception as exc:
+
+        print(
+            "\nWarning: Answer verification failed."
+        )
+
+        print(
+            f"Reason: {exc}"
+        )
+
+        # -------------------------------------------------
+        # Fail open.
+        #
+        # A temporary Gemini verification failure should
+        # not make the entire application unavailable.
+        # -------------------------------------------------
+
+        return {
+            **state,
+            "hallucination_checked": False,
+            "answer_supported": True,
+            "verification_reason": (
+                "Verification service unavailable."
+            ),
+        }
+
+
+# =========================================================
+# NODE 7 — PREPARE ANSWER REGENERATION
+# =========================================================
+
+def prepare_regeneration(
+    state: GraphState,
+) -> GraphState:
+    """
+    Increment the answer-generation retry counter before
+    generating a replacement answer.
+    """
+
+    retry_count = (
+        state["generation_retry_count"] + 1
+    )
+
+    print("\n" + "=" * 70)
+    print("NODE: PREPARE ANSWER REGENERATION")
+    print("=" * 70)
+
+    print(
+        f"Generation retry: "
+        f"{retry_count}/"
+        f"{state['max_generation_retries']}"
+    )
+
+    return {
+        **state,
+        "generation_retry_count": retry_count,
     }
