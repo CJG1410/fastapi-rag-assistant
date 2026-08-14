@@ -30,6 +30,10 @@ class ChromaVectorStore:
             },
         )
 
+    # =====================================================
+    # ADD DOCUMENTS
+    # =====================================================
+
     def add_documents(
         self,
         ids: list[str],
@@ -45,6 +49,10 @@ class ChromaVectorStore:
             embeddings=embeddings,
             metadatas=metadatas,
         )
+
+    # =====================================================
+    # RESET COLLECTION
+    # =====================================================
 
     def reset_collection(self) -> None:
         """Delete the existing collection and recreate it."""
@@ -63,10 +71,18 @@ class ChromaVectorStore:
             },
         )
 
+    # =====================================================
+    # COUNT
+    # =====================================================
+
     def count(self) -> int:
         """Return the number of stored chunks."""
 
         return self.collection.count()
+
+    # =====================================================
+    # QUERY
+    # =====================================================
 
     def query(
         self,
@@ -105,3 +121,83 @@ class ChromaVectorStore:
             )
 
         return retrieved
+
+    # =====================================================
+    # LIST INDEXED DOCUMENTS
+    # =====================================================
+
+    def list_documents(self) -> list[dict]:
+        """
+        Return a document-level summary of the indexed corpus.
+
+        Chroma stores chunks, so multiple chunks belonging to
+        the same source are grouped together here.
+        """
+
+        total_chunks = self.collection.count()
+
+        if total_chunks == 0:
+            return []
+
+        results = self.collection.get(
+            include=[
+                "metadatas",
+            ]
+        )
+
+        metadatas = results.get(
+            "metadatas",
+            [],
+        )
+
+        documents = {}
+
+        for metadata in metadatas:
+
+            metadata = metadata or {}
+
+            source = metadata.get(
+                "source",
+                "unknown",
+            )
+
+            if source not in documents:
+
+                documents[source] = {
+                    "source": source,
+                    "title": metadata.get(
+                        "title",
+                        source,
+                    ),
+                    "url": metadata.get(
+                        "url",
+                        "",
+                    ),
+                    "chunks": 0,
+                }
+
+            documents[source]["chunks"] += 1
+
+            # Preserve useful metadata if it appears
+            # on a later chunk.
+            if (
+                not documents[source]["title"]
+                or documents[source]["title"] == source
+            ):
+                documents[source]["title"] = metadata.get(
+                    "title",
+                    source,
+                )
+
+            if (
+                not documents[source]["url"]
+                and metadata.get("url")
+            ):
+                documents[source]["url"] = metadata[
+                    "url"
+                ]
+
+        return sorted(
+            documents.values(),
+            key=lambda item: item["source"],
+        )
