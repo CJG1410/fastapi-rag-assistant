@@ -162,6 +162,11 @@ def rewrite_query(state: GraphState) -> GraphState:
 
     documents = state["documents"]
 
+    conversation_history = state.get(
+        "conversation_history",
+        [],
+    )
+
     print("\n" + "=" * 70)
     print("NODE: REWRITE QUERY")
     print("=" * 70)
@@ -176,6 +181,7 @@ def rewrite_query(state: GraphState) -> GraphState:
         rewritten = query_rewriter.rewrite(
             original_query=current_query,
             failed_documents=failed_documents,
+            conversation_history=conversation_history,
         )
 
         new_query = rewritten.query
@@ -186,6 +192,10 @@ def rewrite_query(state: GraphState) -> GraphState:
 
         print(
             f"Rewritten query: {new_query}"
+        )
+
+        print(
+            f"Reason: {rewritten.reason}"
         )
 
     except Exception as exc:
@@ -210,7 +220,6 @@ def rewrite_query(state: GraphState) -> GraphState:
         "current_query": new_query,
         "retry_count": state["retry_count"] + 1,
     }
-
 
 # =========================================================
 # NODE 4 — TAVILY WEB SEARCH
