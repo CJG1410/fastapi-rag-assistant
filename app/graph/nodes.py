@@ -1,3 +1,5 @@
+from pydantic import BaseModel
+
 from app.graph.state import GraphState
 
 from app.services.gemini import GeminiService
@@ -6,6 +8,17 @@ from app.services.query_rewriter import QueryRewriter
 from app.services.retriever import Retriever
 from app.services.tavily_search import TavilySearchService
 from app.services.hallucination_checker import HallucinationChecker
+
+
+# =========================================================
+# STRUCTURED RESULT FOR CONVERSATION QUERY PREPARATION
+# =========================================================
+
+class PreparedQuery(BaseModel):
+    """Structured result from conversation-aware query preparation."""
+
+    query: str
+    reason: str
 
 
 # =========================================================
@@ -26,16 +39,198 @@ hallucination_checker = HallucinationChecker()
 
 TOP_K = 5
 
-# Distance threshold for ChromaDB candidates.
-# Gemini performs the final semantic relevance grading.
 DISTANCE_THRESHOLD = 1.0
 
-# Maximum number of retrieval/query-rewrite retries.
 MAX_RETRIES = 2
 
-# Maximum number of answer regeneration attempts
-# after hallucination verification fails.
 MAX_GENERATION_RETRIES = 1
+
+
+# =========================================================
+# NODE 0 — CONVERSATION-AWARE QUERY PREPARATION
+# =========================================================
+
+def prepare_query(state: GraphState) -> GraphState:
+    """
+    Convert the user's current question into a
+    retrieval-ready query using conversation history.
+
+    If there is no previous conversation, the original
+    question is preserved.
+    """
+
+    question = state["question"]
+
+    conversation_history = state.get(
+        "conversation_history",
+        [],
+    )
+
+    print("\n" + "=" * 70)
+    print("NODE: PREPARE CONVERSATION-AWARE QUERY")
+    print("=" * 70)
+
+    print(f"Original question: {question}")
+
+    # -----------------------------------------------------
+    # No previous conversation
+    # -----------------------------------------------------
+
+    if not conversation_history:
+
+        print(
+            "No previous conversation found."
+        )
+
+        print(
+            "Using original question as retrieval query."
+        )
+
+        return {
+            **state,
+            "current_query": question,
+        }
+
+    # -----------------------------------------------------
+    # Format conversation history
+    # -----------------------------------------------------
+
+    history_parts = []
+
+    for message in conversation_history:
+
+        role = message.get(
+            "role",
+            "unknown",
+        )
+
+        content = message.get(
+            "content",
+            "",
+        )
+
+        if content.strip():
+
+            history_parts.append(
+                f"{role.upper()}: {content}"
+            )
+
+    conversation_text = "\n".join(
+        history_parts
+    )
+
+    # -----------------------------------------------------
+    # Conversation-aware query prompt
+    # -----------------------------------------------------
+
+    prompt = f"""
+You are a query preparation component in a technical
+documentation RAG system.
+
+Your task is to transform the user's current question
+into a clear, self-contained search query for semantic
+retrieval.
+
+The user may ask a follow-up question that contains
+ambiguous references such as:
+
+- "it"
+- "this"
+- "that"
+- "one"
+- "they"
+- "the above"
+- "how do I do that?"
+- "what about this?"
+
+Use the previous conversation to resolve those references.
+
+CURRENT USER QUESTION:
+{question}
+
+PREVIOUS CONVERSATION:
+{conversation_text}
+
+Rules:
+
+1. Preserve the user's actual intent.
+
+2. Use the previous conversation only when it helps
+   understand the current question.
+
+3. Resolve ambiguous references into explicit technical
+   terminology.
+
+4. Make the resulting query self-contained.
+
+5. Do not answer the question.
+
+6. Do not invent technical facts.
+
+7. Do not add unrelated information.
+
+8. If the current question is already clear, keep it
+   semantically close to the original question.
+
+9. The result should be suitable for semantic search
+   against technical documentation.
+
+Return:
+
+- query: the retrieval-ready query
+- reason: a short explanation of how the conversation
+  context was used.
+"""
+
+    try:
+
+        response = gemini.client.models.generate_content(
+            model=gemini.model,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": (
+                    PreparedQuery.model_json_schema()
+                ),
+            },
+        )
+
+        prepared = PreparedQuery.model_validate_json(
+            response.text
+        )
+
+        print(
+            f"Prepared query: {prepared.query}"
+        )
+
+        print(
+            f"Reason: {prepared.reason}"
+        )
+
+        return {
+            **state,
+            "current_query": prepared.query,
+        }
+
+    except Exception as exc:
+
+        print(
+            "\nWarning: Conversation-aware query "
+            "preparation failed."
+        )
+
+        print(
+            f"Reason: {exc}"
+        )
+
+        print(
+            "Using the original question."
+        )
+
+        return {
+            **state,
+            "current_query": question,
+        }
 
 
 # =========================================================
@@ -80,6 +275,7 @@ def grade_documents(state: GraphState) -> GraphState:
     """
 
     query = state["current_query"]
+
     documents = state["documents"]
 
     print("\n" + "=" * 70)
@@ -92,10 +288,6 @@ def grade_documents(state: GraphState) -> GraphState:
 
         distance = document["distance"]
 
-        # -------------------------------------------------
-        # Initial vector-distance filter
-        # -------------------------------------------------
-
         if distance > DISTANCE_THRESHOLD:
 
             print(
@@ -104,10 +296,6 @@ def grade_documents(state: GraphState) -> GraphState:
             )
 
             continue
-
-        # -------------------------------------------------
-        # Gemini relevance grading
-        # -------------------------------------------------
 
         grade = grader.grade(
             query=query,
@@ -156,6 +344,14 @@ def grade_documents(state: GraphState) -> GraphState:
 def rewrite_query(state: GraphState) -> GraphState:
     """
     Rewrite the query after unsuccessful retrieval.
+
+    This is different from prepare_query():
+
+    prepare_query()
+        -> resolves conversation context
+
+    rewrite_query()
+        -> fixes a failed retrieval attempt
     """
 
     current_query = state["current_query"]
@@ -209,8 +405,7 @@ def rewrite_query(state: GraphState) -> GraphState:
         )
 
         print(
-            "Keeping the current query and "
-            "continuing the retry cycle."
+            "Keeping the current query."
         )
 
         new_query = current_query
@@ -220,6 +415,7 @@ def rewrite_query(state: GraphState) -> GraphState:
         "current_query": new_query,
         "retry_count": state["retry_count"] + 1,
     }
+
 
 # =========================================================
 # NODE 4 — TAVILY WEB SEARCH
@@ -278,10 +474,6 @@ def web_search(state: GraphState) -> GraphState:
 def _build_generation_context(
     state: GraphState,
 ) -> tuple[str, list[dict]]:
-    """
-    Build the context supplied to Gemini and create
-    deduplicated source metadata.
-    """
 
     relevant_documents = state[
         "relevant_documents"
@@ -430,18 +622,10 @@ def generate_answer(state: GraphState) -> GraphState:
         _build_generation_context(state)
     )
 
-    # -----------------------------------------------------
-    # Source type
-    # -----------------------------------------------------
-
     if web_search_used:
         source_type = "web"
     else:
         source_type = "local"
-
-    # -----------------------------------------------------
-    # Generation prompt
-    # -----------------------------------------------------
 
     prompt = f"""
 You are a technical documentation assistant.
@@ -467,7 +651,7 @@ Rules:
 8. Do not mention LangGraph, document grading, retrieval,
    or internal workflow details.
 9. Do not create or invent source URLs.
-10. Do not include a separate Sources section in the answer.
+10. Do not include a separate Sources section.
     Sources are returned separately by the application.
 
 Provide the final answer now.
@@ -522,10 +706,6 @@ def verify_answer(state: GraphState) -> GraphState:
     print("NODE: VERIFY ANSWER")
     print("=" * 70)
 
-    # -----------------------------------------------------
-    # Build verification context
-    # -----------------------------------------------------
-
     context_parts = []
 
     for document in state[
@@ -548,6 +728,7 @@ def verify_answer(state: GraphState) -> GraphState:
             )
 
             if content:
+
                 context_parts.append(
                     content
                 )
@@ -555,10 +736,6 @@ def verify_answer(state: GraphState) -> GraphState:
     context = "\n\n".join(
         context_parts
     )
-
-    # -----------------------------------------------------
-    # No context
-    # -----------------------------------------------------
 
     if not context.strip():
 
@@ -574,10 +751,6 @@ def verify_answer(state: GraphState) -> GraphState:
                 "No supporting context was available."
             ),
         }
-
-    # -----------------------------------------------------
-    # Gemini verification
-    # -----------------------------------------------------
 
     try:
 
@@ -612,13 +785,6 @@ def verify_answer(state: GraphState) -> GraphState:
             f"Reason: {exc}"
         )
 
-        # -------------------------------------------------
-        # Fail open.
-        #
-        # A temporary Gemini verification failure should
-        # not make the entire application unavailable.
-        # -------------------------------------------------
-
         return {
             **state,
             "hallucination_checked": False,
@@ -636,10 +802,6 @@ def verify_answer(state: GraphState) -> GraphState:
 def prepare_regeneration(
     state: GraphState,
 ) -> GraphState:
-    """
-    Increment the answer-generation retry counter before
-    generating a replacement answer.
-    """
 
     retry_count = (
         state["generation_retry_count"] + 1
