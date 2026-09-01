@@ -7,11 +7,6 @@ documents, rewrite failed queries, generate grounded answers, verify
 generated answers, and optionally fall back to web search when the local
 corpus cannot answer the question.
 
-This project was built as a take-home assignment for an **AI/ML Engineer
-Intern** role. The assignment asks for a LangGraph RAG workflow,
-document grading and self-correction, a FastAPI API, an ingestion
-pipeline, and clear documentation of architecture and tradeoffs.
-
 ------------------------------------------------------------------------
 
 ## 1. Project Overview
